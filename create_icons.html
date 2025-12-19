@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Icon Generator</title>
+</head>
+<body>
+    <h1>Icon Generator for Chrome Extension</h1>
+    <p>This page will help you create icons for the extension.</p>
+    <p>Open this file in a browser and use the canvas below to create icons, or use an image editor to create:</p>
+    <ul>
+        <li>icon16.png (16x16 pixels)</li>
+        <li>icon48.png (48x48 pixels)</li>
+        <li>icon128.png (128x128 pixels)</li>
+    </ul>
+    
+    <canvas id="iconCanvas" width="128" height="128" style="border: 1px solid #ccc; background: #4285f4;"></canvas>
+    <br><br>
+    <button onclick="downloadIcon(16)">Download 16x16</button>
+    <button onclick="downloadIcon(48)">Download 48x48</button>
+    <button onclick="downloadIcon(128)">Download 128x128</button>
+    
+    <script>
+        const canvas = document.getElementById('iconCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Draw a simple video icon
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 128, 128);
+        
+        // Draw play button
+        ctx.fillStyle = '#4285f4';
+        ctx.beginPath();
+        ctx.arc(64, 64, 50, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(54, 44);
+        ctx.lineTo(54, 84);
+        ctx.lineTo(84, 64);
+        ctx.closePath();
+        ctx.fill();
+        
+        function downloadIcon(size) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = size;
+            tempCanvas.height = size;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(canvas, 0, 0, size, size);
+            
+            tempCanvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `icon${size}.png`;
+                a.click();
+                URL.revokeObjectURL(url);
+            });
+        }
+    </script>
+</body>
+</html>
+
+

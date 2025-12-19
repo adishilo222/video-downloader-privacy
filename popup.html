@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Downloader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Video Downloader</h1>
+      <div style="display: flex; gap: 8px;">
+        <button id="scanBtn" class="scan-btn">Refresh</button>
+        <button id="debugBtn" class="scan-btn" style="font-size: 12px; padding: 8px 12px;">🔍 Debug</button>
+      </div>
+    </header>
+    
+    <div id="loading" class="loading hidden">
+      <div class="spinner"></div>
+      <p>Scanning for videos...</p>
+    </div>
+    
+    <div id="error" class="error hidden"></div>
+    
+    <div id="videoList" class="video-list"></div>
+    
+    <div id="emptyState" class="empty-state hidden">
+      <p>No videos found on this page</p>
+    </div>
+    
+    <div id="debugPanel" class="debug-panel hidden">
+      <div class="debug-header">
+        <h3>🔍 Debug Information</h3>
+        <div class="debug-actions">
+          <button id="copyDebugBtn" class="copy-btn">📋 Copy Debug Info</button>
+          <button id="closeDebugBtn" class="close-btn">✕</button>
+        </div>
+      </div>
+      <div id="debugInfo" class="debug-content"></div>
+    </div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
+
+

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Embedded Videos - YouTube, Vimeo, etc.</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .video-container {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        iframe {
+            width: 100%;
+            max-width: 800px;
+            height: 450px;
+            border-radius: 4px;
+        }
+        .info {
+            margin-top: 10px;
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test Embedded Videos for Extension</h1>
+    <p>This page contains embedded videos from YouTube, Vimeo, and other platforms that your extension should now detect!</p>
+    
+    <div class="video-container">
+        <h2>YouTube Video 1</h2>
+        <iframe 
+            src="https://www.youtube.com/embed/dQw4w9WgXcQ" 
+            title="YouTube Video 1"
+            frameborder="0" 
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+            allowfullscreen>
+        </iframe>
+        <div class="info">This YouTube video should be detected by the extension</div>
+    </div>
+
+    <div class="video-container">
+        <h2>YouTube Video 2 (Short URL format)</h2>
+        <iframe 
+            src="https://www.youtube.com/embed/jNQXAC9IVRw" 
+            title="YouTube Video 2"
+            frameborder="0" 
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+            allowfullscreen>
+        </iframe>
+        <div class="info">Another YouTube video to test</div>
+    </div>
+
+    <div class="video-container">
+        <h2>Vimeo Video</h2>
+        <iframe 
+            src="https://player.vimeo.com/video/148751763" 
+            title="Vimeo Video"
+            frameborder="0" 
+            allow="autoplay; fullscreen; picture-in-picture" 
+            allowfullscreen>
+        </iframe>
+        <div class="info">This Vimeo video should be detected</div>
+    </div>
+
+    <div class="video-container">
+        <h2>Dailymotion Video</h2>
+        <iframe 
+            src="https://www.dailymotion.com/embed/video/x7tfy7k" 
+            title="Dailymotion Video"
+            frameborder="0" 
+            allow="autoplay; fullscreen" 
+            allowfullscreen>
+        </iframe>
+        <div class="info">This Dailymotion video should be detected</div>
+    </div>
+
+    <div style="margin-top: 40px; padding: 20px; background: #e3f2fd; border-radius: 8px;">
+        <h3>Instructions:</h3>
+        <ol>
+            <li>Load this page in Chrome</li>
+            <li>Click your Video Downloader extension icon</li>
+            <li>The extension should now detect all embedded videos (YouTube, Vimeo, Dailymotion)</li>
+            <li>For embedded videos, clicking "Open Video" will open the video in a new tab</li>
+            <li>Take screenshots showing the detected embedded videos</li>
+        </ol>
+        <p><strong>Note:</strong> Direct download of YouTube/Vimeo videos isn't always possible due to platform restrictions, so the extension opens the video page instead.</p>
+    </div>
+</body>
+</html>
+
