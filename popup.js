@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   try {
     const scanBtn = document.getElementById('scanBtn');
+    const downloadAllBtn = document.getElementById('downloadAllBtn');
     const debugBtn = document.getElementById('debugBtn');
     const loading = document.getElementById('loading');
     const error = document.getElementById('error');
@@ -10,6 +11,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const debugInfo = document.getElementById('debugInfo');
     const copyDebugBtn = document.getElementById('copyDebugBtn');
     const closeDebugBtn = document.getElementById('closeDebugBtn');
+
+    let currentVideos = [];
 
     // Check if all required elements exist
     if (!scanBtn || !loading || !error || !videoList || !emptyState) {
@@ -59,6 +62,15 @@ document.addEventListener('DOMContentLoaded', () => {
           document.body.removeChild(toast);
         }, 300);
       }, 2500);
+    }
+
+    // Helper for formatting bytes
+    function formatBytes(bytes) {
+      if (!bytes || isNaN(bytes)) return 'Unknown';
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      if (bytes === 0) return '0 Bytes';
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
     }
 
     // Function to capture thumbnails from videos
@@ -133,6 +145,8 @@ document.addEventListener('DOMContentLoaded', () => {
         error.classList.add('hidden');
         videoList.innerHTML = '';
         emptyState.classList.add('hidden');
+        if (downloadAllBtn) downloadAllBtn.classList.add('hidden');
+        currentVideos = [];
 
         // Get the active tab
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -264,6 +278,15 @@ document.addEventListener('DOMContentLoaded', () => {
           }
 
           loading.classList.add('hidden');
+          currentVideos = videos;
+
+          // Show "Download All" button if there are videos
+          if (videos.length > 1 && downloadAllBtn) {
+            downloadAllBtn.classList.remove('hidden');
+          } else if (downloadAllBtn) {
+            downloadAllBtn.classList.add('hidden');
+          }
+
           displayVideos(videos);
         }
       } catch (err) {
@@ -499,6 +522,48 @@ document.addEventListener('DOMContentLoaded', () => {
     performScan();
 
     // Allow manual refresh with the button
+    // Function to download all videos
+    async function downloadAll() {
+      if (!currentVideos || currentVideos.length === 0) return;
+
+      const count = currentVideos.length;
+      showToast(`Starting download of ${count} videos...`, 'success');
+
+      downloadAllBtn.disabled = true;
+      downloadAllBtn.textContent = 'Downloading...';
+
+      // Download videos one by one with a small delay to avoid overwhelming the browser
+      for (let i = 0; i < currentVideos.length; i++) {
+        const video = currentVideos[i];
+        const btn = videoList.querySelectorAll('.download-btn')[i * 2]; // Get the Download button (not Copy URL)
+
+        try {
+          // Update Download All button text with progress
+          downloadAllBtn.textContent = `Progress: ${i + 1}/${count}`;
+
+          // Trigger individual download logic
+          await downloadVideo(video, btn);
+
+          // Small delay between starting downloads
+          if (i < currentVideos.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 800));
+          }
+        } catch (err) {
+          console.error(`Failed to download video ${i + 1}:`, err);
+        }
+      }
+
+      downloadAllBtn.textContent = 'All Started!';
+      setTimeout(() => {
+        downloadAllBtn.disabled = false;
+        downloadAllBtn.textContent = 'Download All';
+      }, 3000);
+    }
+
+    if (downloadAllBtn) {
+      downloadAllBtn.addEventListener('click', downloadAll);
+    }
+
     if (scanBtn) {
       scanBtn.addEventListener('click', performScan);
     }
@@ -729,6 +794,202 @@ document.addEventListener('DOMContentLoaded', () => {
       return item;
     }
 
+    /**
+     * Helper to trigger download via script injection in the page context.
+     * This is used for blob URLs and as a fallback for direct URLs that fail.
+     */
+    async function triggerScriptInjectionDownload(video, button, videoKey) {
+      const urlToDownload = video.blobUrl || video.url;
+      const filename = video.filename || `video_${Date.now()}.${video.extension || 'mp4'}`;
+
+      console.log('[Video Downloader] Attempting script injection download for:', urlToDownload);
+
+      // Get the active tab to inject download script
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) throw new Error('No active tab found');
+
+      // Set up a listener for progress updates from the injected script
+      const progressHandler = (message) => {
+        if (message.type === 'RECORDING_PROGRESS' && message.videoKey === videoKey) {
+          button.innerHTML = `<span>Rec: ${message.progress}% (${message.sizeMB}MB)</span>`;
+        }
+      };
+      chrome.runtime.onMessage.addListener(progressHandler);
+
+      try {
+        const result = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: async (urlToDownload, filenameToUse, videoKeyForProgress) => {
+            try {
+              console.log('[Video Downloader Script] Starting download sequence for:', urlToDownload);
+
+              let blob = null;
+              let blobSize = 0;
+              let blobType = 'video/mp4';
+
+              const sendProgress = (progress, sizeMB) => {
+                try {
+                  chrome.runtime.sendMessage({
+                    type: 'RECORDING_PROGRESS',
+                    videoKey: videoKeyForProgress,
+                    progress: progress,
+                    sizeMB: sizeMB
+                  });
+                } catch (e) { /* ignore */ }
+              };
+
+              // Look for video elements that might be playing this URL
+              const videos = document.querySelectorAll('video');
+              let videoElement = null;
+              for (const vid of videos) {
+                const vidSrc = vid.src || vid.currentSrc || '';
+                if (vidSrc === urlToDownload || vidSrc.includes(urlToDownload.split('/').pop())) {
+                  videoElement = vid;
+                  break;
+                }
+              }
+
+              const methods = [];
+
+              // Only try native link if it's a blob URL
+              if (urlToDownload.startsWith('blob:')) {
+                methods.push(async () => {
+                  console.log('[Video Downloader Script] Method: Native link...');
+                  const a = document.createElement('a');
+                  a.href = urlToDownload;
+                  a.download = filenameToUse;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  throw new Error('Native link triggered, verifying with fetch...');
+                });
+              }
+
+              // Method: Direct fetch
+              methods.push(async () => {
+                console.log('[Video Downloader Script] Method: Fetch...');
+                const response = await fetch(urlToDownload);
+                if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+                const b = await response.blob();
+                if (b.size < 1024) throw new Error('Fetch result too small');
+                return b;
+              });
+
+              // Method: XMLHttpRequest (sometimes works when fetch fails)
+              methods.push(async () => {
+                console.log('[Video Downloader Script] Method: XHR...');
+                return new Promise((resolve, reject) => {
+                  const xhr = new XMLHttpRequest();
+                  xhr.open('GET', urlToDownload, true);
+                  xhr.responseType = 'blob';
+                  xhr.onload = () => {
+                    if ((xhr.status === 200 || xhr.status === 0) && xhr.response?.size > 1024) {
+                      resolve(xhr.response);
+                    } else reject(new Error('XHR failed or small result'));
+                  };
+                  xhr.onerror = () => reject(new Error('XHR error'));
+                  xhr.send();
+                });
+              });
+
+              // Method: MediaRecorder (Last resort fallback for streams)
+              if (videoElement) {
+                methods.push(async () => {
+                  console.log('[Video Downloader Script] Method: MediaRecorder (Memory Capture)...');
+                  return new Promise((resolve, reject) => {
+                    try {
+                      if (videoElement.readyState < 2) throw new Error('Video not ready');
+                      const stream = videoElement.captureStream ? videoElement.captureStream() : videoElement.mozCaptureStream();
+                      if (!stream) throw new Error('Stream capture failed');
+
+                      const chunks = [];
+                      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+                      recorder.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
+                      recorder.onstop = () => {
+                        const b = new Blob(chunks, { type: 'video/webm' });
+                        b.size > 0 ? resolve(b) : reject(new Error('Empty recording'));
+                      };
+
+                      const wasPlaying = !videoElement.paused;
+                      const originalTime = videoElement.currentTime;
+                      videoElement.currentTime = 0;
+                      recorder.start(1000);
+                      videoElement.play().catch(() => { });
+
+                      const duration = videoElement.duration && isFinite(videoElement.duration)
+                        ? Math.min(videoElement.duration * 1000, 900000) : 10000;
+
+                      const startTime = Date.now();
+                      const progressInterval = setInterval(() => {
+                        const elapsed = Date.now() - startTime;
+                        const progress = Math.min(Math.round((elapsed / duration) * 100), 99);
+                        const sizeMB = (chunks.reduce((s, c) => s + c.size, 0) / (1024 * 1024)).toFixed(1);
+                        sendProgress(progress, sizeMB);
+                      }, 2000);
+
+                      setTimeout(() => {
+                        clearInterval(progressInterval);
+                        if (recorder.state !== 'inactive') recorder.stop();
+                        videoElement.pause();
+                        videoElement.currentTime = originalTime;
+                        if (wasPlaying) videoElement.play().catch(() => { });
+                      }, duration + 500);
+                    } catch (e) { reject(e); }
+                  });
+                });
+              }
+
+              let lastError = null;
+              for (const method of methods) {
+                try {
+                  blob = await method();
+                  if (blob && blob.size >= 1024) break;
+                } catch (e) {
+                  console.log('[Video Downloader Script] Method failed:', e.message);
+                  lastError = e;
+                }
+              }
+
+              if (!blob || blob.size < 1024) throw new Error(lastError?.message || 'All methods failed to get valid video data');
+
+              const objectUrl = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = objectUrl;
+              a.download = filenameToUse;
+              document.body.appendChild(a);
+              a.click();
+
+              setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(objectUrl);
+              }, 30000);
+
+              return { success: true, blobSize: blob.size, blobType: blob.type };
+            } catch (err) {
+              return { success: false, error: err.message };
+            }
+          },
+          args: [urlToDownload, filename, videoKey]
+        });
+
+        const downloadResult = result[0]?.result;
+        if (downloadResult?.success) {
+          button.innerHTML = '<span>Downloaded!</span>';
+          // formatBytes is defined in the outer scope (popup.js)
+          showToast(`✓ Download started! (${formatBytes(downloadResult.blobSize)})`, 'success');
+          setTimeout(() => {
+            button.disabled = false;
+            button.innerHTML = '<span>Download</span>';
+          }, 2000);
+          return true;
+        } else {
+          throw new Error(downloadResult?.error || 'Script injection failed');
+        }
+      } finally {
+        chrome.runtime.onMessage.removeListener(progressHandler);
+      }
+    }
+
     async function downloadVideo(video, button) {
       // Prevent duplicate downloads of the same video
       const videoKey = video.url || video.videoId || `${video.platform}_${Date.now()}`;
@@ -767,407 +1028,33 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
 
-        // Handle blob URLs - try multiple methods to download
+        // Handle blob URLs - use the new helper
         if (video.isBlob) {
-          const blobUrl = video.blobUrl || video.url;
-          const filename = video.filename || `video_${Date.now()}.${video.extension || 'mp4'}`;
-
-          console.log('[Video Downloader] Attempting to download blob URL:', blobUrl);
-
-          // Get the active tab to inject download script
-          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-          let downloadSuccess = false;
-          let lastError = null;
-
-          // Method 1: Try to download via injected script (most reliable for blob URLs)
           try {
-            console.log('[Video Downloader] Method 1: Trying script injection download...');
-
-            // Set up a listener for progress updates from the injected script
-            // This allows us to update the UI while recording
-            const progressHandler = (message) => {
-              if (message.type === 'RECORDING_PROGRESS' && message.videoKey === videoKey) {
-                button.innerHTML = `<span>Rec: ${message.progress}% (${message.sizeMB}MB)</span>`;
-              }
-            };
-            chrome.runtime.onMessage.addListener(progressHandler);
-
-            const result = await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              func: async (blobUrlToDownload, filenameToUse, videoKeyForProgress) => {
-                try {
-                  console.log('[Video Downloader Script] Attempting to download blob:', blobUrlToDownload);
-
-                  let blob = null;
-                  let blobSize = 0;
-                  let blobType = 'video/mp4';
-
-                  // Helper to send progress to popup
-                  const sendProgress = (progress, sizeMB) => {
-                    try {
-                      chrome.runtime.sendMessage({
-                        type: 'RECORDING_PROGRESS',
-                        videoKey: videoKeyForProgress,
-                        progress: progress,
-                        sizeMB: sizeMB
-                      });
-                    } catch (e) { /* ignore */ }
-                  };
-
-                  // First, find the video element with this blob URL
-                  const videos = document.querySelectorAll('video');
-                  let videoElement = null;
-
-                  for (const vid of videos) {
-                    const vidSrc = vid.src || vid.currentSrc || '';
-                    if (vidSrc === blobUrlToDownload || vidSrc.includes(blobUrlToDownload.split('/').pop())) {
-                      videoElement = vid;
-                      console.log('[Video Downloader Script] ✓ Found video element with blob URL');
-                      break;
-                    }
-                  }
-
-                  // Try multiple methods to get the blob
-                  const methods = [];
-
-                  // Method 1: Native Link Download (Instant)
-                  // This is the fastest method if the browser allows it
-                  methods.push(async () => {
-                    console.log('[Video Downloader Script] Method 1: Native link download...');
-                    return new Promise((resolve, reject) => {
-                      try {
-                        const a = document.createElement('a');
-                        a.href = blobUrlToDownload;
-                        a.download = filenameToUse;
-                        a.style.display = 'none';
-                        document.body.appendChild(a);
-                        a.click();
-
-                        // We can't easily detect if this worked, so we'll 
-                        // also try fetch in parallel or sequence.
-                        // Actually, we'll wait a brief moment and then "succeed" 
-                        // if we think it worked, but better to use fetch for verification.
-                        document.body.removeChild(a);
-
-                        // Move to next method for actual data verification
-                        reject(new Error('Native link triggered, verifying with fetch...'));
-                      } catch (e) {
-                        reject(e);
-                      }
-                    });
-                  });
-
-                  // Method 2: Direct fetch (try without CORS restrictions first)
-                  methods.push(async () => {
-                    console.log('[Video Downloader Script] Method 2: Direct fetch...');
-                    const response = await fetch(blobUrlToDownload);
-                    if (response.ok) {
-                      const fetchedBlob = await response.blob();
-                      if (fetchedBlob.size > 1024) { // Re-check size here
-                        return fetchedBlob;
-                      }
-                    }
-                    throw new Error(`Fetch failed or empty: ${response.status}`);
-                  });
-
-                  // Method 2: Fetch from video element src
-                  if (videoElement) {
-                    methods.push(async () => {
-                      console.log('[Video Downloader Script] Method 2: Fetch from video element...');
-                      const videoSrc = videoElement.src || videoElement.currentSrc;
-                      if (videoSrc && videoSrc.startsWith('blob:')) {
-                        const response = await fetch(videoSrc);
-                        if (response.ok) {
-                          const fetchedBlob = await response.blob();
-                          if (fetchedBlob.size > 0) {
-                            return fetchedBlob;
-                          }
-                        }
-                      }
-                      throw new Error('Video element fetch failed');
-                    });
-                  }
-
-                  // Method 3: XMLHttpRequest
-                  methods.push(async () => {
-                    console.log('[Video Downloader Script] Method 3: XMLHttpRequest...');
-                    return new Promise((resolve, reject) => {
-                      const xhr = new XMLHttpRequest();
-                      xhr.open('GET', blobUrlToDownload, true);
-                      xhr.responseType = 'blob';
-
-                      xhr.onload = function () {
-                        if ((xhr.status === 200 || xhr.status === 0) && xhr.response && xhr.response.size > 0) {
-                          resolve(xhr.response);
-                        } else {
-                          reject(new Error(`XHR failed: status ${xhr.status}, size ${xhr.response?.size || 0}`));
-                        }
-                      };
-
-                      xhr.onerror = function () {
-                        reject(new Error('XHR network error'));
-                      };
-
-                      xhr.ontimeout = function () {
-                        reject(new Error('XHR timeout'));
-                      };
-
-                      xhr.timeout = 30000; // 30 second timeout
-                      xhr.send();
-                    });
-                  });
-
-                  // Method 4: Use MediaRecorder to capture video from memory
-                  if (videoElement) {
-                    methods.push(async () => {
-                      console.log('[Video Downloader Script] Method 4: MediaRecorder capture from memory...');
-
-                      return new Promise((resolve, reject) => {
-                        try {
-                          // Ensure video has loaded data
-                          if (videoElement.readyState < 2) {
-                            throw new Error('Video not ready for capture (readyState < 2)');
-                          }
-
-                          // Capture the video stream from memory
-                          const stream = videoElement.captureStream ? videoElement.captureStream() : videoElement.mozCaptureStream();
-                          if (!stream) throw new Error('Could not capture video stream');
-
-                          const chunks = [];
-                          const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-
-                          recorder.ondataavailable = (e) => {
-                            if (e.data?.size > 0) {
-                              chunks.push(e.data);
-                              console.log(`[Video Downloader Script] Captured chunk: ${e.data.size} bytes`);
-                            }
-                          };
-
-                          recorder.onstop = () => {
-                            const blob = new Blob(chunks, { type: 'video/webm' });
-                            console.log(`[Video Downloader Script] MediaRecorder finished. Total size: ${blob.size} bytes from ${chunks.length} chunks`);
-                            blob.size > 0 ? resolve(blob) : reject(new Error('Captured video is empty'));
-                          };
-
-                          recorder.onerror = (e) => reject(new Error(`MediaRecorder error: ${e.error}`));
-
-                          // Store original state
-                          const wasPlaying = !videoElement.paused;
-                          const originalTime = videoElement.currentTime;
-
-                          // Reset video to beginning for full capture
-                          videoElement.currentTime = 0;
-
-                          // Start recording and play the video
-                          recorder.start(1000); // Request data every 1 second
-                          console.log('[Video Downloader Script] MediaRecorder started, playing video from beginning...');
-
-                          // Play the video to capture it
-                          const playPromise = videoElement.play();
-                          if (playPromise) {
-                            playPromise.catch(err => {
-                              console.warn('[Video Downloader Script] Play failed:', err);
-                            });
-                          }
-
-                          // Calculate duration to record (max 15 minutes for safety)
-                          // Support for longer videos (up to 15 minutes = 900 seconds)
-                          const MAX_RECORDING_MS = 15 * 60 * 1000; // 15 minutes in milliseconds
-                          const duration = videoElement.duration && isFinite(videoElement.duration)
-                            ? Math.min(videoElement.duration * 1000, MAX_RECORDING_MS)
-                            : 10000; // Default 10 seconds if duration unknown
-
-                          console.log(`[Video Downloader Script] Recording for ${(duration / 1000).toFixed(1)}s (video duration: ${videoElement.duration}s, max: ${MAX_RECORDING_MS / 1000}s)`);
-
-                          // Return a promise that includes progress tracking
-                          const startTime = Date.now();
-                          const progressInterval = setInterval(() => {
-                            const elapsed = Date.now() - startTime;
-                            const progress = Math.min(Math.round((elapsed / duration) * 100), 99);
-                            const totalChunksSize = chunks.reduce((sum, chunk) => sum + chunk.size, 0);
-                            const sizeMB = (totalChunksSize / 1024 / 1024).toFixed(1);
-                            console.log(`[Video Downloader Script] Recording progress: ${progress}% (${sizeMB} MB captured)`);
-
-                            // Send progress update back to popup
-                            sendProgress(progress, sizeMB);
-                          }, 2000); // Update every 2 seconds
-
-                          // Stop recording after video duration
-                          setTimeout(() => {
-                            clearInterval(progressInterval);
-                            if (recorder.state !== 'inactive') {
-                              recorder.stop();
-                              console.log('[Video Downloader Script] Stopping MediaRecorder after duration');
-                            }
-
-                            // Restore original state
-                            videoElement.pause();
-                            videoElement.currentTime = originalTime;
-                            if (wasPlaying) {
-                              videoElement.play().catch(() => { });
-                            }
-                          }, duration + 500); // Add small buffer
-
-                        } catch (error) {
-                          reject(error);
-                        }
-                      });
-                    });
-                  }
-
-                  // Try all methods in sequence
-                  let lastError = null;
-                  for (let i = 0; i < methods.length; i++) {
-                    try {
-                      blob = await methods[i]();
-                      blobSize = blob.size;
-                      blobType = blob.type || 'video/mp4';
-                      console.log(`[Video Downloader Script] ✓ Method ${i + 1} succeeded! Size: ${blobSize}, Type: ${blobType}`);
-                      break;
-                    } catch (methodError) {
-                      console.log(`[Video Downloader Script] Method ${i + 1} failed:`, methodError.message);
-                      lastError = methodError;
-                      continue;
-                    }
-                  }
-
-                  if (!blob || blob.size === 0) {
-                    throw new Error(lastError?.message || 'Blob is empty or could not be retrieved (0 bytes). All methods failed.');
-                  }
-
-                  // CRITICAL: Validate blob size - files < 1KB are likely error responses, not actual videos
-                  const MIN_VIDEO_SIZE = 1024; // 1KB minimum
-                  if (blob.size < MIN_VIDEO_SIZE) {
-                    console.warn(`[Video Downloader Script] ⚠ Blob size (${blob.size} bytes) is suspiciously small. This is likely an error response, not a video.`);
-                    throw new Error(`Downloaded blob is too small (${blob.size} bytes). This appears to be an error response rather than actual video content. The blob URL may be expired or invalid.`);
-                  }
-
-                  console.log('[Video Downloader Script] ✓ Blob ready. Size:', blobSize, 'Type:', blobType);
-
-                  // Create object URL from the blob
-                  const objectUrl = URL.createObjectURL(blob);
-                  console.log('[Video Downloader Script] Created object URL for download');
-
-                  // Create download link and trigger it
-                  const a = document.createElement('a');
-                  a.href = objectUrl;
-                  a.download = filenameToUse;
-                  a.style.display = 'none';
-                  a.setAttribute('download', filenameToUse); // Ensure download attribute is set
-
-                  // Add to body
-                  document.body.appendChild(a);
-
-                  console.log('[Video Downloader Script] Triggering download click...');
-
-                  // Use multiple methods to trigger download
-                  // Method 1: Direct click
-                  a.click();
-
-                  // Method 2: Dispatch mouse event (more reliable)
-                  const clickEvent = new MouseEvent('click', {
-                    view: window,
-                    bubbles: true,
-                    cancelable: true
-                  });
-                  a.dispatchEvent(clickEvent);
-
-                  // Wait a moment to ensure download starts
-                  await new Promise(resolve => setTimeout(resolve, 1000));
-
-                  // Clean up element
-                  document.body.removeChild(a);
-
-                  // Don't revoke object URL immediately - let download complete
-                  setTimeout(() => {
-                    URL.revokeObjectURL(objectUrl);
-                    console.log('[Video Downloader Script] Cleaned up object URL');
-                  }, 30000); // Longer timeout for large files
-
-                  return { success: true, blobSize: blobSize, blobType: blobType };
-                } catch (err) {
-                  console.error('[Video Downloader Script] All download methods failed:', err);
-                  console.error('[Video Downloader Script] Error details:', {
-                    message: err.message,
-                    stack: err.stack,
-                    name: err.name
-                  });
-                  return { success: false, error: err.message, stack: err.stack };
-                }
-              },
-              args: [blobUrl, filename, videoKey]
-            });
-
-            // Clean up the progress listener
-            chrome.runtime.onMessage.removeListener(progressHandler);
-
-            const downloadResult = result[0]?.result;
-            console.log('[Video Downloader] Download result:', downloadResult);
-
-            if (downloadResult && downloadResult.success) {
-              downloadSuccess = true;
+            const success = await triggerScriptInjectionDownload(video, button, videoKey);
+            if (success) {
               activeDownloads.delete(videoKey);
-              button.innerHTML = '<span>Downloaded!</span>';
-              error.classList.remove('hidden');
-              error.style.background = 'linear-gradient(135deg, #34a853 0%, #2d8f47 100%)';
-              // Format bytes for display
-              const formatBytes = (bytes) => {
-                if (!bytes || isNaN(bytes)) return 'Unknown';
-                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-                if (bytes === 0) return '0 Bytes';
-                const i = Math.floor(Math.log(bytes) / Math.log(1024));
-                return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
-              };
-              error.textContent = `✓ Download started! File size: ${downloadResult.blobSize ? formatBytes(downloadResult.blobSize) : 'unknown'}`;
-              setTimeout(() => {
-                error.classList.add('hidden');
-                error.style.background = ''; // Reset
-              }, 3000);
-              setTimeout(() => {
-                button.disabled = false;
-                button.innerHTML = '<span>Download</span>';
-              }, 2000);
-            } else {
-              lastError = new Error(downloadResult?.error || 'Script injection download failed');
-              console.error('[Video Downloader] Method 1 failed:', lastError.message);
+              return;
             }
-          } catch (scriptError) {
-            lastError = scriptError;
-            console.error('[Video Downloader] Script injection error:', scriptError);
-          }
-
-          // Note: Chrome downloads API doesn't work for blob URLs, so we skip Method 2
-          // The script injection method (Method 1) is the only reliable way for blob URLs
-
-          // If download failed, show error with retry option
-          if (!downloadSuccess) {
-            console.error('[Video Downloader] Download failed. Last error:', lastError);
-
+          } catch (err) {
+            console.error('[Video Downloader] Blob download failed:', err);
             activeDownloads.delete(videoKey);
             button.disabled = false;
             button.innerHTML = '<span>Retry Download</span>';
-
-            error.classList.remove('hidden');
-            if (lastError?.message?.includes('too small')) {
-              error.textContent = `Download failed: The video source is protected or no longer available as a direct file. Try refreshing the page.`;
-            } else {
-              error.textContent = `Download failed: ${lastError?.message || 'Unknown error'}\n\nNote: Some videos are "streaming only" and must be recorded by playing them. If recording failed, try playing the video for a few seconds first.`;
-            }
-            error.style.whiteSpace = 'pre-wrap';
-            error.style.fontSize = '12px';
-            error.style.padding = '16px 20px';
-
-            setTimeout(() => {
-              error.classList.add('hidden');
-              error.style.whiteSpace = '';
-              error.style.fontSize = '';
-              error.style.padding = '';
-              button.innerHTML = '<span>Download</span>';
-            }, 10000);
+            showToast(`Download failed: ${err.message}`, 'error');
           }
-
           return;
+        }
+
+        // Handle HLS/DASH manifest files specifically
+        if (video.url.match(/\.(m3u8|mpd)(\?|$)/i)) {
+          error.classList.remove('hidden');
+          error.textContent = 'This is a streaming playlist (HLS/DASH). Downloading the file directly will only save the playlist text. To save the full video, try recording it using the MediaRecorder method if available.';
+          error.style.background = 'linear-gradient(135deg, #ff9800 0%, #f57c00 100%)';
+          setTimeout(() => {
+            error.classList.add('hidden');
+            error.style.background = '';
+          }, 8000);
         }
 
         // For direct video URLs, use Chrome downloads API
@@ -1185,7 +1072,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // Monitor download progress for this specific video
-        const onDownloadChanged = (downloadDelta) => {
+        const onDownloadChanged = async (downloadDelta) => {
           if (downloadDelta.id === downloadId) {
             if (downloadDelta.state && downloadDelta.state.current === 'complete') {
               // Download completed successfully
@@ -1197,16 +1084,25 @@ document.addEventListener('DOMContentLoaded', () => {
               }, 2000);
               chrome.downloads.onChanged.removeListener(onDownloadChanged);
             } else if (downloadDelta.state && downloadDelta.state.current === 'interrupted') {
-              // Download failed or was interrupted
-              activeDownloads.delete(videoKey);
-              button.disabled = false;
-              button.innerHTML = '<span>Download</span>';
-              error.classList.remove('hidden');
-              error.textContent = 'Download was interrupted. Please try again.';
-              setTimeout(() => {
-                error.classList.add('hidden');
-              }, 3000);
+              // Download failed or was interrupted - TRY FALLBACK!
+              console.log('[Video Downloader] Chrome download interrupted! Error:', downloadDelta.error?.current);
+              console.log('[Video Downloader] Attempting automatic script-injection fallback...');
+
               chrome.downloads.onChanged.removeListener(onDownloadChanged);
+
+              try {
+                const success = await triggerScriptInjectionDownload(video, button, videoKey);
+                if (success) {
+                  activeDownloads.delete(videoKey);
+                  return;
+                }
+              } catch (fallbackErr) {
+                console.error('[Video Downloader] Fallback also failed:', fallbackErr);
+                activeDownloads.delete(videoKey);
+                button.disabled = false;
+                button.innerHTML = '<span>Retry Download</span>';
+                showToast(`Download failed: ${fallbackErr.message}`, 'error');
+              }
             }
           }
         };
@@ -1440,9 +1336,9 @@ async function scanForVideos() {
         const url = res.name;
         const type = res.initiatorType;
         // Look for video extensions or common video patterns in URLs
-        if (url.match(/\.(mp4|webm|ogg|mov|m4s|m3u8|ts)(\?|$)/i) ||
-          url.includes('video/') ||
-          url.includes('/media/')) {
+        // EXCLUDE fragments (.m4s, .ts, .m4a) to avoid "too many files" noise
+        if (url.match(/\.(mp4|webm|ogg|mov|m3u8|mpd)(\?|$)/i) ||
+          (url.includes('video/') && !url.match(/\.(m4s|ts|m4a|m4v)(\?|$)/i))) {
           if (!url.startsWith('blob:') && !url.startsWith('data:')) {
             networkUrls.add(url);
           }
@@ -1464,8 +1360,11 @@ async function scanForVideos() {
       patterns.forEach(pattern => {
         let match;
         while ((match = pattern.exec(content)) !== null) {
-          const url = match[1].replace(/\\/g, ''); // Unescape slashes
-          if (url && !url.startsWith('blob:') && !url.startsWith('data:')) {
+          let url = match[1].replace(/\\/g, ''); // Unescape slashes
+
+          // Exclude fragments
+          if (url && !url.startsWith('blob:') && !url.startsWith('data:') &&
+            !url.match(/\.(m4s|ts|m4a|m4v)(\?|$)/i)) {
             networkUrls.add(url);
           }
         }
