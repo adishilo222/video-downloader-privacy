@@ -1048,13 +1048,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Handle HLS/DASH manifest files specifically
         if (video.url.match(/\.(m3u8|mpd)(\?|$)/i)) {
-          error.classList.remove('hidden');
-          error.textContent = 'This is a streaming playlist (HLS/DASH). Downloading the file directly will only save the playlist text. To save the full video, try recording it using the MediaRecorder method if available.';
-          error.style.background = 'linear-gradient(135deg, #ff9800 0%, #f57c00 100%)';
-          setTimeout(() => {
-            error.classList.add('hidden');
-            error.style.background = '';
-          }, 8000);
+          try {
+            const success = await downloadHLSVideo(video, button, videoKey);
+            if (success) {
+              activeDownloads.delete(videoKey);
+              return;
+            }
+          } catch (hlsErr) {
+            console.error('[Video Downloader] High-speed HLS download failed, falling back to basic methods:', hlsErr);
+            // Continue to recording/download logic if assembly fails
+          }
         }
 
         // For direct video URLs, use Chrome downloads API
@@ -1133,6 +1136,126 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => {
           error.classList.add('hidden');
         }, 5000);
+      }
+    }
+
+    /**
+     * HLS Segment Assembler - Faster and more reliable than recording
+     */
+    async function downloadHLSVideo(video, button, videoKey) {
+      console.log('[Video Downloader] Starting HLS Segment Assembly for:', video.url);
+      button.innerHTML = '<span>Parsing HLS...</span>';
+
+      try {
+        // 1. Fetch and Parse Manifest
+        const manifestUrl = video.url;
+        const response = await fetch(manifestUrl);
+        if (!response.ok) throw new Error(`Failed to fetch manifest: ${response.status}`);
+        let manifestText = await response.text();
+
+        // 2. Handle Multivariant Manifest (Master)
+        // If it contains #EXT-X-STREAM-INF, it's a master manifest pointing to sub-manifests
+        if (manifestText.includes('#EXT-X-STREAM-INF')) {
+          console.log('[Video Downloader] Master manifest detected, finding highest quality...');
+          const lines = manifestText.split('\n');
+          let bestUrl = null;
+          let maxBandwidth = 0;
+
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes('#EXT-X-STREAM-INF')) {
+              const bandwidthMatch = lines[i].match(/BANDWIDTH=(\d+)/);
+              const bandwidth = bandwidthMatch ? parseInt(bandwidthMatch[1]) : 0;
+              const subUrl = lines[i + 1]?.trim();
+
+              if (subUrl && bandwidth > maxBandwidth) {
+                maxBandwidth = bandwidth;
+                bestUrl = subUrl;
+              }
+            }
+          }
+
+          if (bestUrl) {
+            const absoluteBestUrl = new URL(bestUrl, manifestUrl).href;
+            console.log('[Video Downloader] Selected best quality:', absoluteBestUrl);
+            const subResp = await fetch(absoluteBestUrl);
+            if (!subResp.ok) throw new Error(`Failed to fetch sub-manifest: ${subResp.status}`);
+            manifestText = await subResp.text();
+            video.url = absoluteBestUrl; // Use this for segment resolution
+          }
+        }
+
+        // 3. Extract Segments and Init
+        const lines = manifestText.split('\n');
+        const segments = [];
+        let initUrl = null;
+
+        lines.forEach(line => {
+          line = line.trim();
+          if (line.startsWith('#EXT-X-MAP:URI="')) {
+            const match = line.match(/URI="([^"]+)"/);
+            if (match) initUrl = new URL(match[1], video.url).href;
+          } else if (line && !line.startsWith('#')) {
+            segments.push(new URL(line, video.url).href);
+          }
+        });
+
+        if (segments.length === 0) throw new Error('No video segments found in manifest');
+        console.log(`[Video Downloader] Found ${segments.length} segments. Init: ${initUrl ? 'YES' : 'NO'}`);
+
+        // 4. Download Segments
+        button.innerHTML = `<span>Preparing... (0/${segments.length})</span>`;
+        const chunks = [];
+
+        // Fetch Init segment first if exists
+        if (initUrl) {
+          const initResp = await fetch(initUrl);
+          if (initResp.ok) chunks.push(await initResp.arrayBuffer());
+        }
+
+        const batchSize = 5; // Concurrency control
+        for (let i = 0; i < segments.length; i += batchSize) {
+          const batch = segments.slice(i, i + batchSize);
+          const results = await Promise.all(batch.map(async (url, j) => {
+            try {
+              const res = await fetch(url);
+              if (!res.ok) return null;
+              return await res.arrayBuffer();
+            } catch (e) { return null; }
+          }));
+
+          results.forEach(chunk => { if (chunk) chunks.push(chunk); });
+
+          const progress = Math.min(Math.round(((i + batchSize) / segments.length) * 100), 100);
+          button.innerHTML = `<span>Assembling: ${progress}%</span>`;
+        }
+
+        // 5. Combine and Download
+        const finalBlob = new Blob(chunks, { type: 'video/mp4' });
+        const downloadUrl = URL.createObjectURL(finalBlob);
+
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = video.filename || `video_${Date.now()}.mp4`;
+        document.body.appendChild(a);
+        a.click();
+
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(downloadUrl);
+        }, 10000);
+
+        button.innerHTML = '<span>Downloaded!</span>';
+        showToast('✓ HLS Video assembled and downloaded!', 'success');
+
+        setTimeout(() => {
+          button.disabled = false;
+          button.innerHTML = '<span>Download</span>';
+        }, 2000);
+
+        return true;
+      } catch (err) {
+        console.error('[Video Downloader] HLS Assembly Error:', err);
+        throw err;
       }
     }
   } catch (err) {
