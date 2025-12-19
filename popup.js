@@ -585,70 +585,56 @@ document.addEventListener('DOMContentLoaded', () => {
       const item = document.createElement('div');
       item.className = 'video-item';
 
+      // Thumbnail with Overlays
+      const thumbnailContainer = document.createElement('div');
+      thumbnailContainer.className = 'thumbnail-container';
+
       const thumbnail = document.createElement('img');
       thumbnail.className = 'video-thumbnail';
       thumbnail.alt = video.altText || video.title || 'Video thumbnail';
-      thumbnail.title = video.title || 'Video thumbnail';
+
+      // Duration Overlay
+      if (video.duration && video.duration !== 'Unknown') {
+        const durationBadge = document.createElement('div');
+        durationBadge.className = 'duration-badge';
+        durationBadge.textContent = video.duration;
+        thumbnailContainer.appendChild(durationBadge);
+      }
+
+      // Quality Overlay (e.g. 1080p, 720p)
+      if (video.resolution) {
+        const qualityBadge = document.createElement('div');
+        qualityBadge.className = 'quality-badge';
+        qualityBadge.textContent = video.resolution;
+        thumbnailContainer.appendChild(qualityBadge);
+      }
 
       // Set thumbnail with proper error handling
       if (video.thumbnail) {
         thumbnail.src = video.thumbnail;
         thumbnail.onerror = function () {
-          this.onerror = null; // Prevent infinite loop
-          // Try to extract just the video ID/name for cleaner placeholder
-          const videoIdentifier = video.title?.substring(0, 20) || 'Video';
+          this.onerror = null;
           this.src = 'data:image/svg+xml,' + encodeURIComponent(
             '<svg xmlns="http://www.w3.org/2000/svg" width="180" height="101">' +
-            '<defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">' +
-            '<stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />' +
-            '<stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" /></linearGradient></defs>' +
-            '<rect width="180" height="101" fill="url(#grad)"/>' +
-            '<text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="white" font-family="sans-serif" font-size="24" font-weight="600">🎬</text>' +
+            '<rect width="180" height="101" fill="#2a2a2a"/>' +
+            '<text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="#666" font-family="sans-serif" font-size="24">🎬</text>' +
             '</svg>'
           );
         };
-      } else if (video.isBlob) {
-        // Blob videos get orange gradient placeholder
-        thumbnail.src = 'data:image/svg+xml,' + encodeURIComponent(
-          '<svg xmlns="http://www.w3.org/2000/svg" width="180" height="101">' +
-          '<defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">' +
-          '<stop offset="0%" style="stop-color:#ff9800;stop-opacity:1" />' +
-          '<stop offset="100%" style="stop-color:#f57c00;stop-opacity:1" /></linearGradient></defs>' +
-          '<rect width="180" height="101" fill="url(#grad)"/>' +
-          '<text x="50%" y="45%" text-anchor="middle" dy=".3em" fill="white" font-family="sans-serif" font-size="16" font-weight="600">⚡</text>' +
-          '<text x="50%" y="60%" text-anchor="middle" dy=".3em" fill="white" font-family="sans-serif" font-size="11">Temporary</text>' +
-          '</svg>'
-        );
-      } else if (video.isHunted) {
-        // Hunted videos get a green "Success/Rocket" gradient
-        thumbnail.src = 'data:image/svg+xml,' + encodeURIComponent(
-          '<svg xmlns="http://www.w3.org/2000/svg" width="180" height="101">' +
-          '<defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">' +
-          '<stop offset="0%" style="stop-color:#4caf50;stop-opacity:1" />' +
-          '<stop offset="100%" style="stop-color:#2e7d32;stop-opacity:1" /></linearGradient></defs>' +
-          '<rect width="180" height="101" fill="url(#grad)"/>' +
-          '<text x="50%" y="45%" text-anchor="middle" dy=".3em" fill="white" font-family="sans-serif" font-size="16" font-weight="600">🚀</text>' +
-          '<text x="50%" y="60%" text-anchor="middle" dy=".3em" fill="white" font-family="sans-serif" font-size="11">Direct URL</text>' +
-          '</svg>'
-        );
       } else {
-        // Regular videos without thumbnails
         thumbnail.src = 'data:image/svg+xml,' + encodeURIComponent(
           '<svg xmlns="http://www.w3.org/2000/svg" width="180" height="101">' +
-          '<defs><linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">' +
-          '<stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />' +
-          '<stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" /></linearGradient></defs>' +
-          '<rect width="180" height="101" fill="url(#grad)"/>' +
-          '<text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="white" font-family="sans-serif" font-size="24" font-weight="600">🎬</text>' +
+          '<rect width="180" height="101" fill="#2a2a2a"/>' +
+          '<text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="#666" font-family="sans-serif" font-size="24">🎬</text>' +
           '</svg>'
         );
       }
 
-      // Add click handler to open video in new tab
-      thumbnail.addEventListener('click', () => {
-        if (video.url) {
-          chrome.tabs.create({ url: video.url });
-        }
+      thumbnailContainer.appendChild(thumbnail);
+
+      // Add click handler to thumbnail
+      thumbnailContainer.addEventListener('click', () => {
+        if (video.url) chrome.tabs.create({ url: video.url });
       });
 
       // Create main content wrapper
@@ -665,7 +651,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const title = document.createElement('div');
       title.className = 'video-title';
-      title.textContent = video.title || `Video ${index + 1}`;
+
+      // Add HLS Badge if it's a playlist
+      if (video.url && video.url.includes('.m3u8')) {
+        const hlsBadge = document.createElement('span');
+        hlsBadge.className = 'hls-badge';
+        hlsBadge.textContent = 'HLS';
+        title.appendChild(hlsBadge);
+      }
+
+      const titleText = document.createTextNode(video.title || `Video ${index + 1}`);
+      title.appendChild(titleText);
       title.title = video.title || `Video ${index + 1}`;
 
       // Add alt text as subtitle if available and different from title
@@ -676,7 +672,6 @@ document.addEventListener('DOMContentLoaded', () => {
         subtitle.textContent = video.altText;
         subtitle.title = video.altText;
         titleContainer = document.createElement('div');
-        titleContainer.className = 'video-title-container';
         titleContainer.appendChild(title);
         titleContainer.appendChild(subtitle);
       }
@@ -684,42 +679,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const details = document.createElement('div');
       details.className = 'video-details';
 
-      // Size
-      const sizeItem = document.createElement('div');
-      sizeItem.className = 'detail-item';
-      sizeItem.innerHTML = `<span class="detail-label">Size</span> <span>${video.size || 'Unknown'}</span>`;
-
-      // Duration
-      const durationItem = document.createElement('div');
-      durationItem.className = 'detail-item';
-      durationItem.innerHTML = `<span class="detail-label">Duration</span> <span>${video.duration || 'Unknown'}</span>`;
-
-      // Blob URL indicator with helpful explanation
-      if (video.isBlob) {
-        const blobItem = document.createElement('div');
-        blobItem.className = 'detail-item';
-        blobItem.style.color = '#ff9800';
-        blobItem.style.fontWeight = '600';
-        blobItem.style.wordBreak = 'break-word';
-        blobItem.style.overflowWrap = 'break-word';
-        blobItem.innerHTML = `<span class="detail-label">⚡ Type:</span> <span>Temporary Memory URL</span>`;
-        blobItem.title = 'Blob URLs are temporary video references stored in browser memory. They may expire when you refresh the page.';
-        details.insertBefore(blobItem, details.firstChild);
+      if (video.size && video.size !== 'Unknown') {
+        const sizeItem = document.createElement('div');
+        sizeItem.className = 'detail-item';
+        sizeItem.innerHTML = `<span class="detail-label">Size:</span> <span>${video.size}</span>`;
+        details.appendChild(sizeItem);
       }
 
-      // Hunted URL indicator
-      if (video.isHunted) {
-        const huntItem = document.createElement('div');
-        huntItem.className = 'detail-item';
-        huntItem.style.color = '#4caf50';
-        huntItem.style.fontWeight = '600';
-        huntItem.innerHTML = `<span class="detail-label">🚀 Type:</span> <span>Direct Download</span>`;
-        huntItem.title = 'This original source URL was found in the network logs, allowing for an instant, high-quality download.';
-        details.insertBefore(huntItem, details.firstChild);
+      if (video.resolution && !video.resolution.includes('p')) {
+        const resItem = document.createElement('div');
+        resItem.className = 'detail-item';
+        resItem.innerHTML = `<span class="detail-label">Quality:</span> <span>${video.resolution}</span>`;
+        details.appendChild(resItem);
       }
-
-      details.appendChild(sizeItem);
-      details.appendChild(durationItem);
 
       // Create button container for Download and Copy URL
       const buttonContainer = document.createElement('div');
@@ -787,8 +759,8 @@ document.addEventListener('DOMContentLoaded', () => {
       contentWrapper.appendChild(info);
       contentWrapper.appendChild(buttonContainer);
 
-      // Add thumbnail and content wrapper to item
-      item.appendChild(thumbnail);
+      // Add thumbnail container and content wrapper to item
+      item.appendChild(thumbnailContainer);
       item.appendChild(contentWrapper);
 
       return item;
@@ -1442,6 +1414,57 @@ async function scanForVideos() {
       return filename || `video_${Date.now()}.${getExtension(url)}`;
     } catch {
       return `video_${Date.now()}.${getExtension(url)}`;
+    }
+  }
+
+  async function extractHLSMetadata(url) {
+    if (!url.includes('.m3u8')) return null;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return null;
+      const text = await response.text();
+
+      const metadata = {
+        resolution: null,
+        bandwidth: null,
+        duration: null
+      };
+
+      // Extract Resolution/Bandwidth from Master
+      const streamMatch = text.match(/#EXT-X-STREAM-INF:.*BANDWIDTH=(\d+)(?:,.*RESOLUTION=(\d+x\d+))?/i);
+      if (streamMatch) {
+        metadata.bandwidth = streamMatch[1];
+        metadata.resolution = streamMatch[2] ? (streamMatch[2].split('x')[1] + 'p') : null;
+      } else {
+        // Find highest quality if multi-line
+        const lines = text.split('\n');
+        let maxB = 0;
+        lines.forEach(line => {
+          if (line.includes('BANDWIDTH=')) {
+            const b = line.match(/BANDWIDTH=(\d+)/i);
+            const r = line.match(/RESOLUTION=(\d+x\d+)/i);
+            if (b && parseInt(b[1]) > maxB) {
+              maxB = parseInt(b[1]);
+              metadata.bandwidth = b[1];
+              metadata.resolution = r ? (r[1].split('x')[1] + 'p') : null;
+            }
+          }
+        });
+      }
+
+      // Extract Duration from Media Manifest
+      if (text.includes('#EXTINF:')) {
+        const infs = text.match(/#EXTINF:([\d\.]+)/g);
+        if (infs) {
+          let total = 0;
+          infs.forEach(inf => total += parseFloat(inf.split(':')[1]));
+          metadata.duration = formatDuration(total);
+        }
+      }
+
+      return metadata;
+    } catch (e) {
+      return null;
     }
   }
 
@@ -2562,6 +2585,23 @@ async function scanForVideos() {
     if (!seenUrls.has(key)) {
       seenUrls.add(key);
       uniqueVideos.push(video);
+    } else {
+      // If we've seen it but this version has more metadata (like resolution), update it
+      const existing = uniqueVideos.find(v => {
+        if (v.isBlob) return `${v.url}_${videos.indexOf(v)}` === key;
+        if (v.platform && v.videoId) return `${v.platform}_${v.videoId}` === key;
+        try {
+          const urlObj = new URL(v.url);
+          let normalized = urlObj.origin + urlObj.pathname;
+          if (urlObj.searchParams.has('v')) normalized += `?v=${urlObj.searchParams.get('v')}`;
+          return normalized === key;
+        } catch (e) { return v.url === key; }
+      });
+      if (existing) {
+        if (video.resolution) existing.resolution = video.resolution;
+        if (video.duration) existing.duration = video.duration;
+        if (video.thumbnail) existing.thumbnail = video.thumbnail;
+      }
     }
   });
 
@@ -2587,7 +2627,16 @@ async function scanForVideos() {
     });
 
     return Promise.all(uniqueVideos.map(async (video) => {
-      // Skip size fetching for:
+      // 1. Fetch HLS Metadata if needed
+      if (video.url.includes('.m3u8') && (!video.resolution || !video.duration)) {
+        const metadata = await extractHLSMetadata(video.url);
+        if (metadata) {
+          if (!video.resolution) video.resolution = metadata.resolution;
+          if (!video.duration || video.duration === 'Unknown') video.duration = metadata.duration;
+        }
+      }
+
+      // 2. Skip size fetching for:
       // - file:// URLs (CORS)
       // - blob URLs (temporary)
       // - Platform videos (YouTube, Vimeo, etc. - not direct video files)
@@ -2595,7 +2644,6 @@ async function scanForVideos() {
         video.url.startsWith('blob:') ||
         video.url.startsWith('file:') ||
         video.platform) {
-        // Size already set to 'Unknown' above
         return video;
       }
 
@@ -2604,13 +2652,8 @@ async function scanForVideos() {
         const contentLength = response.headers.get('content-length');
         if (contentLength) {
           video.size = formatBytes(parseInt(contentLength));
-        } else {
-          video.size = 'Unknown';
         }
-      } catch (err) {
-        // CORS error or other fetch error - set size to Unknown
-        video.size = 'Unknown';
-      }
+      } catch (err) { }
       return video;
     }));
   } catch (err) {
