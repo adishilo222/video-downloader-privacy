@@ -1,0 +1,87 @@
+name: Version Bump and Package
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'popup.js'
+      - 'content.js'
+      - 'manifest.json'
+      - 'popup.css'
+      - 'popup.html'
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Bump version in manifest.json
+        id: bump_version
+        run: |
+          # Read current version
+          CURRENT_VERSION=$(node -p "require('./manifest.json').version")
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Split version into parts
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          # Increment patch version
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          
+          echo "New version: $NEW_VERSION"
+          
+          # Update manifest.json
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            manifest.version = '$NEW_VERSION';
+            fs.writeFileSync('manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+          "
+          
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          
+      - name: Package extension
+        run: |
+          mkdir -p dist
+          zip -r dist/video-downloader-v${{ steps.bump_version.outputs.version }}.zip \
+            manifest.json \
+            popup.html \
+            popup.css \
+            popup.js \
+            content.js \
+            icons/ \
+            -x "*.git*" "*.DS_Store"
+            
+      - name: Commit version bump
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add manifest.json
+          git commit -m "chore: bump version to ${{ steps.bump_version.outputs.version }}" || echo "No changes to commit"
+          
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.bump_version.outputs.version }}
+          name: Release v${{ steps.bump_version.outputs.version }}
+          files: dist/video-downloader-v${{ steps.bump_version.outputs.version }}.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
