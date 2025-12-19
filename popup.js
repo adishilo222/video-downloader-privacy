@@ -24,6 +24,107 @@ document.addEventListener('DOMContentLoaded', () => {
     // Track active downloads to prevent duplicates and ensure one-by-one downloads
     const activeDownloads = new Set();
 
+    // Toast notification function
+    function showToast(message, type = 'success') {
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.textContent = message;
+      toast.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: ${type === 'success' ? 'linear-gradient(135deg, #4caf50 0%, #388e3c 100%)' : 'linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%)'};
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      font-size: 14px;
+      font-weight: 600;
+      z-index: 10000;
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    `;
+
+      document.body.appendChild(toast);
+
+      // Animate in
+      setTimeout(() => {
+        toast.style.transform = 'translateX(-50%) translateY(0)';
+      }, 10);
+
+      // Animate  out and remove
+      setTimeout(() => {
+        toast.style.transform = 'translateX(-50%) translateY(100px)';
+        setTimeout(() => {
+          document.body.removeChild(toast);
+        }, 300);
+      }, 2500);
+    }
+
+    // Function to capture thumbnails from videos
+    async function captureThumbnails(tabId, videos) {
+      console.log('[Video Downloader] Capturing thumbnails for', videos.length, 'videos');
+
+      try {
+        const result = await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          func: (videoData) => {
+            const thumbnails = {};
+            const videoElements = document.querySelectorAll('video');
+
+            videoElements.forEach((video, index) => {
+              try {
+                // Skip if we already have a poster
+                const videoSrc = video.src || video.currentSrc || '';
+                if (!videoSrc || video.poster) return;
+
+                // Only capture if video has loaded some data
+                if (video.readyState < 2) return; // HAVE_CURRENT_DATA
+
+                // Create canvas to capture frame
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth || 320;
+                canvas.height = video.videoHeight || 180;
+
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // Convert to data URL
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+
+                // Store with video URL as key
+                if (dataUrl && dataUrl.length > 100) { // Valid thumbnail
+                  thumbnails[videoSrc] = dataUrl;
+                }
+              } catch (e) {
+                // Skip videos that can't be captured (CORS, etc.)
+              }
+            });
+
+            return thumbnails;
+          },
+          args: [videos.map(v => ({ url: v.url, blobUrl: v.blobUrl }))]
+        });
+
+        if (result && result[0] && result[0].result) {
+          const thumbnails = result[0].result;
+          console.log('[Video Downloader] Captured', Object.keys(thumbnails).length, 'thumbnails');
+
+          // Update video objects with captured thumbnails
+          videos.forEach(video => {
+            const key = video.blobUrl || video.url;
+            if (!video.thumbnail && thumbnails[key]) {
+              video.thumbnail = thumbnails[key];
+              video.thumbnailCaptured = true;
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('[Video Downloader] Thumbnail capture error:', err);
+        // Non-critical error, continue without thumbnails
+      }
+    }
+
     // Function to scan for videos
     async function performScan() {
       try {
@@ -131,9 +232,38 @@ document.addEventListener('DOMContentLoaded', () => {
         if (videos.length === 0) {
           console.log('[Video Downloader Popup] No videos found - showing empty state');
           emptyState.classList.remove('hidden');
-          emptyState.textContent = 'No videos found on this page';
+          emptyState.innerHTML = `
+            <p style="font-size: 16px; color: #666; margin-bottom: 12px;">
+              No videos found on this page
+            </p>
+            <p style="font-size: 13px; color: #999; line-height: 1.6;">
+              This could be because:<br>
+              • The video hasn't loaded yet<br>
+              • Video is protected or using a player we can't detect<br>
+              • Page uses streaming instead of direct video files<br>
+              <br>
+              Try refreshing the page and waiting for videos to load!
+            </p>
+          `;
         } else {
           console.log(`[Video Downloader Popup] Displaying ${videos.length} videos`);
+
+          // Show count in loading message temporarily
+          loading.classList.remove('hidden');
+          const loadingText = loading.querySelector('p');
+          if (loadingText) {
+            loadingText.textContent = `Found ${videos.length} video${videos.length !== 1 ? 's' : ''}! Capturing thumbnails...`;
+          }
+
+          // Capture thumbnails for videos that don't have them
+          try {
+            await captureThumbnails(tab.id, videos);
+          } catch (thumbError) {
+            console.warn('[Video Downloader] Thumbnail capture failed:', thumbError);
+            // Continue anyway - videos will show placeholders
+          }
+
+          loading.classList.add('hidden');
           displayVideos(videos);
         }
       } catch (err) {
@@ -503,6 +633,13 @@ document.addEventListener('DOMContentLoaded', () => {
       details.appendChild(sizeItem);
       details.appendChild(durationItem);
 
+      // Create button container for Download and Copy URL
+      const buttonContainer = document.createElement('div');
+      buttonContainer.style.display = 'flex';
+      buttonContainer.style.flexDirection = 'column';
+      buttonContainer.style.gap = '8px';
+      buttonContainer.style.alignSelf = 'center';
+
       const downloadBtn = document.createElement('button');
       downloadBtn.className = 'download-btn';
 
@@ -518,12 +655,49 @@ document.addEventListener('DOMContentLoaded', () => {
 
       downloadBtn.addEventListener('click', () => downloadVideo(video, downloadBtn));
 
+      // Add Copy URL button for all videos
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'download-btn';
+      copyBtn.style.background = 'linear-gradient(135deg, #2196F3 0%, #1976D2 100%)';
+      copyBtn.style.boxShadow = '0 4px 16px rgba(33, 150, 243, 0.4)';
+      copyBtn.style.minWidth = '100px';
+      copyBtn.style.fontSize = '12px';
+      copyBtn.style.padding = '8px 16px';
+      copyBtn.innerHTML = '<span>📋 Copy URL</span>';
+      copyBtn.title = 'Copy video URL to clipboard';
+
+      copyBtn.addEventListener('click', async () => {
+        try {
+          const urlToCopy = video.blobUrl || video.url;
+          await navigator.clipboard.writeText(urlToCopy);
+
+          // Show success feedback
+          const originalHTML = copyBtn.innerHTML;
+          copyBtn.innerHTML = '<span>✓ Copied!</span>';
+          copyBtn.style.background = 'linear-gradient(135deg, #4caf50 0%, #388e3c 100%)';
+
+          // Show toast notification
+          showToast('URL copied to clipboard!', 'success');
+
+          setTimeout(() => {
+            copyBtn.innerHTML = originalHTML;
+            copyBtn.style.background = 'linear-gradient(135deg, #2196F3 0%, #1976D2 100%)';
+          }, 2000);
+        } catch (err) {
+          console.error('Copy failed:', err);
+          showToast('Failed to copy URL', 'error');
+        }
+      });
+
+      buttonContainer.appendChild(downloadBtn);
+      buttonContainer.appendChild(copyBtn);
+
       info.appendChild(titleContainer);
       info.appendChild(details);
 
-      // Add info and download button to content wrapper
+      // Add info and button container to content wrapper
       contentWrapper.appendChild(info);
-      contentWrapper.appendChild(downloadBtn);
+      contentWrapper.appendChild(buttonContainer);
 
       // Add thumbnail and content wrapper to item
       item.appendChild(thumbnail);

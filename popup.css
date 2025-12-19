@@ -257,6 +257,8 @@ h1::before {
 
 .video-thumbnail:hover {
   border-color: #667eea;
+  transform: scale(1.05);
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
 }
 
 .video-thumbnail::after {
@@ -264,16 +266,17 @@ h1::before {
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(0.8);
   font-size: 32px;
-  color: rgba(255, 255, 255, 0.8);
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
   opacity: 0;
-  transition: opacity 0.3s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .video-item:hover .video-thumbnail::after {
   opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
 }
 
 .video-info {
