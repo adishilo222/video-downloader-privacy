@@ -1335,10 +1335,13 @@ async function scanForVideos() {
       resources.forEach(res => {
         const url = res.name;
         const type = res.initiatorType;
-        // Look for video extensions or common video patterns in URLs
-        // EXCLUDE fragments (.m4s, .ts, .m4a) to avoid "too many files" noise
-        if (url.match(/\.(mp4|webm|ogg|mov|m3u8|mpd)(\?|$)/i) ||
-          (url.includes('video/') && !url.match(/\.(m4s|ts|m4a|m4v)(\?|$)/i))) {
+        // EXCLUDE fragments (.m4s, .ts, .m4a, etc.) and common partial segment patterns to avoid "too many files" noise
+        const isFragment = url.match(/\.(m4s|ts|m4a|m4v|aac|m4p|m4b)(\?|$)/i) ||
+          url.match(/[\-\._/](segment|chunk|fragment|init-)[0-9]*[\-\._/]/i) ||
+          url.includes('/sc-') || // Common for some streaming platforms
+          url.includes('/seg-');
+
+        if ((url.match(/\.(mp4|webm|ogg|mov|m3u8|mpd)(\?|$)/i) || url.includes('video/')) && !isFragment) {
           if (!url.startsWith('blob:') && !url.startsWith('data:')) {
             networkUrls.add(url);
           }
@@ -1363,8 +1366,11 @@ async function scanForVideos() {
           let url = match[1].replace(/\\/g, ''); // Unescape slashes
 
           // Exclude fragments
-          if (url && !url.startsWith('blob:') && !url.startsWith('data:') &&
-            !url.match(/\.(m4s|ts|m4a|m4v)(\?|$)/i)) {
+          const isFragment = url.match(/\.(m4s|ts|m4a|m4v|aac|m4p|m4b)(\?|$)/i) ||
+            url.match(/[\-\._/](segment|chunk|fragment|init-)[0-9]*[\-\._/]/i) ||
+            url.match(/[\-\._/][0-9]{3,}[\-\._/]/); // Likely a segment if it has long numbers
+
+          if (url && !url.startsWith('blob:') && !url.startsWith('data:') && !isFragment) {
             networkUrls.add(url);
           }
         }
@@ -2389,7 +2395,17 @@ async function scanForVideos() {
     } else if (video.platform && video.videoId) {
       key = `${video.platform}_${video.videoId}`;
     } else {
-      key = video.url;
+      // Normalize URL (remove common query params that don't change the video content)
+      try {
+        const urlObj = new URL(video.url);
+        // Keep the origin and pathname
+        let normalized = urlObj.origin + urlObj.pathname;
+        // Check for specific video platforms that use query params for video ID
+        if (urlObj.searchParams.has('v')) normalized += `?v=${urlObj.searchParams.get('v')}`;
+        key = normalized;
+      } catch (e) {
+        key = video.url;
+      }
     }
 
     if (!seenUrls.has(key)) {
