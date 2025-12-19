@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Video Downloader",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Scan and download videos from any webpage",
   "permissions": [
     "activeTab",
