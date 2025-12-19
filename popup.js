@@ -1341,7 +1341,13 @@ async function scanForVideos() {
           url.includes('/sc-') || // Common for some streaming platforms
           url.includes('/seg-');
 
-        if ((url.match(/\.(mp4|webm|ogg|mov|m3u8|mpd)(\?|$)/i) || url.includes('video/')) && !isFragment) {
+        // BETTER HLS FILTERING: Only include "Master" manifests
+        // Most sub-manifests have "video_" or "audio_" or similar in the name
+        const isSubManifest = url.includes('.m3u8') &&
+          (url.match(/(video|audio|track|stream|variant)[\-_]?[0-9]+/i) ||
+            url.match(/[\-_]([0-9]{3,}|low|high|med|auto)\./i));
+
+        if ((url.match(/\.(mp4|webm|ogg|mov|m3u8|mpd)(\?|$)/i) || url.includes('video/')) && !isFragment && !isSubManifest) {
           if (!url.startsWith('blob:') && !url.startsWith('data:')) {
             networkUrls.add(url);
           }
@@ -1370,7 +1376,12 @@ async function scanForVideos() {
             url.match(/[\-\._/](segment|chunk|fragment|init-)[0-9]*[\-\._/]/i) ||
             url.match(/[\-\._/][0-9]{3,}[\-\._/]/); // Likely a segment if it has long numbers
 
-          if (url && !url.startsWith('blob:') && !url.startsWith('data:') && !isFragment) {
+          // Better HLS filtering for scraped URLs too
+          const isSubManifest = url.includes('.m3u8') &&
+            (url.match(/(video|audio|track|stream|variant)[\-_]?[0-9]+/i) ||
+              url.match(/[\-_]([0-9]{3,}|low|high|med|auto)\./i));
+
+          if (url && !url.startsWith('blob:') && !url.startsWith('data:') && !isFragment && !isSubManifest) {
             networkUrls.add(url);
           }
         }
@@ -1554,6 +1565,23 @@ async function scanForVideos() {
           video.getAttribute('title') ||
           null;
 
+        // SMART THUMBNAIL DETECTION
+        let thumbnail = video.poster || null;
+        if (!thumbnail) {
+          // Check player UI containers (Bitmovin, Video.js, etc.)
+          const playerContainer = video.closest('.bitmovinplayer-container, .video-js, .vjs-poster, [class*="player"]');
+          if (playerContainer) {
+            const posterEl = playerContainer.querySelector('.bmpui-ui-poster, .vjs-poster, [class*="poster"]');
+            if (posterEl) {
+              const bg = window.getComputedStyle(posterEl).backgroundImage;
+              if (bg && bg !== 'none') {
+                const match = bg.match(/url\(['"]?([^'"]+)['"]?\)/);
+                if (match) thumbnail = match[1];
+              }
+            }
+          }
+        }
+
         // Check if this is a blob URL - include it and allow download attempt
         const isBlob = src.startsWith('blob:');
         const isData = src.startsWith('data:');
@@ -1592,7 +1620,7 @@ async function scanForVideos() {
           width: video.videoWidth || video.getAttribute('width') || null,
           height: video.videoHeight || video.getAttribute('height') || null,
           duration: video.duration ? formatDuration(video.duration) : null,
-          thumbnail: video.poster || null,
+          thumbnail: thumbnail,
           extension: isBlob ? 'mp4' : getExtension(actualUrl),
           filename: isBlob ? `video_${Date.now()}_${videoName.substring(0, 20).replace(/[^a-z0-9]/gi, '_')}.mp4` : getFilename(actualUrl),
           isBlob: isBlob,
